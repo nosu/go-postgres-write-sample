@@ -1,29 +1,33 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v4/stdlib"
+	"cloud.google.com/go/alloydbconn"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
-var db *sql.DB
+var conn *pgxpool.Pool
 
 func main() {
+	ctx := context.Background()
+
 	// Setup DB connection
 	var err error
-	db, err = connectTCPSocket()
+	conn, err = connectDB(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer conn.Close()
 
-	createTableIfNotExists(db)
+	createTableIfNotExists(ctx, conn)
 
 	log.Print("Starting server...")
 	http.HandleFunc("/", handler)
@@ -55,7 +59,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err := insertTimestampToDB(trace)
+	err := insertTimestampToDB(context.Background(), trace)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to insert records to DB: %w", err), 500)
 	}
@@ -65,47 +69,44 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func faviconHandler(w http.ResponseWriter, r *http.Request) {}
 
-func createTableIfNotExists(db *sql.DB) {
-	_, err := db.Exec("CREATE TABLE IF NOT EXISTS record (id SERIAL PRIMARY KEY, trace_id TEXT, type TEXT, timestamp TIMESTAMP)")
+func createTableIfNotExists(ctx context.Context, conn *pgxpool.Pool) {
+	_, err := conn.Exec(ctx, "CREATE TABLE IF NOT EXISTS record (id SERIAL PRIMARY KEY, trace_id TEXT, type TEXT, timestamp TIMESTAMP)")
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("Table created successfully")
 }
 
-func insertTimestampToDB(trace string) error {
-	var err error
-	var tx *sql.Tx
+func insertTimestampToDB(ctx context.Context, trace string) error {
+	// var err error
+	// var tx pgx.Tx
 
 	sql := "INSERT INTO record (trace_id, type, timestamp) VALUES ($1, $2, $3);"
-	tx, err = db.Begin()
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		log.Print(err)
 		return err
 	}
 
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
-	_, err = tx.Exec(sql, trace, "BEGIN", time.Now())
-	if err != nil {
+	if _, err := tx.Exec(ctx, sql, trace, "BEGIN", time.Now()); err != nil {
 		log.Print(err)
 		return err
 	}
 	log.Printf("Begin record inserted successfully: %s", trace)
 
-	// Wait for 5 seconds
+	// Wait for 5 seconds for testing
 	log.Printf("Wait for 5 seconds: %s", trace)
 	time.Sleep(5 * time.Second)
 
-	_, err = tx.Exec(sql, trace, "END", time.Now())
-	if err != nil {
+	if _, err := tx.Exec(ctx, sql, trace, "END", time.Now()); err != nil {
 		log.Print(err)
 		return err
 	}
 	log.Printf("End record inserted successfully: %s", trace)
 
-	err = tx.Commit()
-	if err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		log.Print(err)
 		return err
 	}
@@ -114,22 +115,44 @@ func insertTimestampToDB(trace string) error {
 	return nil
 }
 
-func connectTCPSocket() (*sql.DB, error) {
+func connectDB(ctx context.Context) (*pgxpool.Pool, error) {
 	var (
-		dbUser    = mustGetenv("DB_USER")
-		dbPwd     = mustGetenv("DB_PASS")
-		dbTCPHost = mustGetenv("DB_HOST")
-		dbPort    = mustGetenv("DB_PORT")
-		dbName    = mustGetenv("DB_NAME")
+		env    = mustGetenv("ENVIRONMENT")
+		dbHost = mustGetenv("DB_HOST")
+		dbPort = mustGetenv("DB_PORT")
+		dbUser = mustGetenv("DB_USER")
+		dbPwd  = mustGetenv("DB_PASS")
+		dbName = mustGetenv("DB_NAME")
 	)
-
-	dbURI := fmt.Sprintf("host=%s user=%s password=%s port=%s database=%s",
-		dbTCPHost, dbUser, dbPwd, dbPort, dbName)
-
-	dbPool, err := sql.Open("pgx", dbURI)
+	// Configure the driver to connect to the database
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", dbHost, dbPort, dbUser, dbPwd, dbName)
+	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("sql.Open: %v", err)
+		log.Fatalf("failed to parse pgx config: %v", err)
 	}
 
-	return dbPool, nil
+	if env == "PROD" {
+		log.Print("Using AlloyDB Go Connector dialer")
+
+		// Create a new dialer with any options
+		d, err := alloydbconn.NewDialer(ctx)
+		if err != nil {
+			log.Fatalf("failed to initialize dialer: %v", err)
+		}
+		defer d.Close()
+
+		// Tell the driver to use the AlloyDB Go Connector to create connections
+		config.ConnConfig.DialFunc = func(ctx context.Context, _ string, instance string) (net.Conn, error) {
+			return d.Dial(ctx, "projects/<PROJECT>/locations/<REGION>/clusters/<CLUSTER>/instances/<INSTANCE>")
+		}
+	} else {
+		log.Print("Using default dialer")
+	}
+
+	// Interact with the driver directly as you normally would
+	conn, err := pgxpool.ConnectConfig(context.Background(), config)
+	if err != nil {
+		log.Fatalf("failed to connect: %v", err)
+	}
+	return conn, nil
 }

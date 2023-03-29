@@ -16,7 +16,11 @@ gcloud run deploy db-write-webapi --source . --region us-central1
 
 
 ```
-export PORJECT_ID=alloydb-test-381909;export DB_USER=user;export DB_PASS=password;export DB_HOST=test;export DB_PORT=5432;export DB_NAME=test
+docker-compose up
+```
+
+```
+export PORJECT_ID=alloydb-test-381909;export DB_USER=user;export DB_PASS=password;export DB_HOST=test;export DB_PORT=5432;export DB_NAME=test;ENVIRONMENT=LOCAL
 go run main.go
 ```
 sudo mv /var/lib/dpkg/info/containerd.io.* /tmp/ && sudo mv /var/lib/dpkg/info/docker-ce-cli.* /tmp/ && sudo mv /var/lib/dpkg/info/docker-ce.* /tmp/

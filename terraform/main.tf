@@ -105,6 +105,9 @@ module "cloud_run" {
       name  = "PROJECT_ID"
       value = var.project_id
     }, { 
+      name  = "ENVIRONMENT"
+      value = "PROD"
+    }, { 
       name  = "DB_USER"
       value = var.alloydb_user
     }, { 
