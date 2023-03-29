@@ -1,0 +1,27 @@
+version: '3'
+services:
+  webapi:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_USER=local_user
+      - DB_PASS=local_password
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=local_db
+    depends_on:
+      - db
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: local_user
+      POSTGRES_PASSWORD: local_password
+      POSTGRES_DB: local_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+volumes:
+  db-data:
